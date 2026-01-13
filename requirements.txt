@@ -1,0 +1,10 @@
+hvplot==1.21.0
+jax==0.4.28
+jaxlib==0.4.28
+joblib==1.5.2
+matplotlib==3.10.7
+pandas==2.3.3
+pennylane==0.42.3
+PennyLane-qiskit==0.42.0
+qiskit==1.2.4
+torch==2.6.0
