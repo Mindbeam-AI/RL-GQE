@@ -40,7 +40,7 @@ class GPTQE(GPT):
 
         return loss
 
-    def calculate_loss_r(self, tokens, energies, epsilon, old_model=None):
+    def calculate_loss_GRPO(self, tokens, energies, epsilon, old_model=None):
 
         # --- Step 1: current log-probs ---
         logits = self(tokens[:, :-1])  # predict next-token logits
@@ -79,6 +79,45 @@ class GPTQE(GPT):
         #     "loss": loss.item(),
         # })
         return loss, advantages
+
+    def calculate_loss_DPO(self, tokens, energies, beta):
+        M, T = tokens.shape
+
+        logits = self(tokens[:, :-1])
+        # ref_logits = ref_model(tokens[:, :-1])
+
+        log_probs = F.log_softmax(logits, dim=-1)
+        token_logp = log_probs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
+        logp = token_logp.sum(dim=-1)
+
+        logp_ref = -energies
+
+        best_idx = energies.argmin()
+        log_ratio = logp - logp_ref
+        best_log_ratio = logp[best_idx] - logp_ref[best_idx]
+
+        mask = torch.arange(M).to("cuda") != best_idx
+        diff = best_log_ratio - log_ratio[mask]
+
+        loss = F.softplus(-beta * diff)
+        return loss.mean()
+
+    def calculate_loss_CPO(self, tokens, energies, beta):
+        energies = (energies - energies.mean()) / (energies.std() + 1e-6)
+
+        logits = self(tokens[:, :-1])
+        log_probs = F.log_softmax(logits, dim=-1)
+        token_logp = log_probs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
+        logp = token_logp.sum(dim=-1)          # (M,)
+
+        # Boltzmann reference
+        logp_ref = -energies                   # (M,)
+
+        # CPO objective
+        loss = -beta * (logp - logp_ref)
+        loss = loss.mean()
+
+        return loss
 
     @torch.no_grad()
     def generate(self, n_sequences, max_new_tokens, temperature=1.0, device="cpu"):
