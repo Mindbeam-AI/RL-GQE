@@ -80,8 +80,11 @@ class GPTQE(GPT):
         # })
         return loss, advantages
 
-    def calculate_loss_DPO(self, tokens, energies, beta):
+    def calculate_loss_DPO(self, tokens, energies, beta, ref_model=None):
         M, T = tokens.shape
+
+        energies = energies.detach()
+        energies = (energies - energies.mean()) / (energies.std() + 1e-6)
 
         logits = self(tokens[:, :-1])
         # ref_logits = ref_model(tokens[:, :-1])
@@ -91,9 +94,9 @@ class GPTQE(GPT):
         logp = token_logp.sum(dim=-1)
 
         logp_ref = -energies
+        log_ratio = logp - logp_ref
 
         best_idx = energies.argmin()
-        log_ratio = logp - logp_ref
         best_log_ratio = logp[best_idx] - logp_ref[best_idx]
 
         mask = torch.arange(M).to("cuda") != best_idx
@@ -102,22 +105,38 @@ class GPTQE(GPT):
         loss = F.softplus(-beta * diff)
         return loss.mean()
 
-    def calculate_loss_CPO(self, tokens, energies, beta):
+    def calculate_loss_CPO(self, tokens, energies, beta, ref_model=None):
+        M, T = tokens.shape
+
+        energies = energies.detach()
         energies = (energies - energies.mean()) / (energies.std() + 1e-6)
 
         logits = self(tokens[:, :-1])
+
         log_probs = F.log_softmax(logits, dim=-1)
         token_logp = log_probs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
         logp = token_logp.sum(dim=-1)          # (M,)
 
         # Boltzmann reference
-        logp_ref = -energies                   # (M,)
+        if ref_model is None:
+            logp_ref = -energies                   # (M,)
+        else:
+            ref_logits = ref_model(tokens[:, :-1])
+            ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+            ref_token_logp = ref_log_probs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
+            logp_ref = ref_token_logp.sum(dim=-1)
 
-        # CPO objective
-        loss = -beta * (logp - logp_ref)
-        loss = loss.mean()
+        log_ratio = logp - logp_ref
 
-        return loss
+        best_idx = energies.argmin()
+        best_log_ratio = logp[best_idx] - logp_ref[best_idx]
+
+        mask = torch.arange(M).to("cuda") != best_idx
+        diff = best_log_ratio - log_ratio[mask]
+
+        dpo_term = F.softplus(-beta * diff)
+        loss = dpo_term - logp[best_idx]
+        return loss.mean()
 
     @torch.no_grad()
     def generate(self, n_sequences, max_new_tokens, temperature=1.0, device="cpu"):
