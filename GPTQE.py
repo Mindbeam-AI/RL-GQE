@@ -56,19 +56,42 @@ class GPTQE(GPT):
         else:
             old_log_probs = curr_log_probs.detach()
 
-        # --- Step 3: rewards & normalized advantages (per token) ---
-        rewards = -energies                # [B, T-1] (skip start token)
-        mean_r = rewards.mean()
-        std_r = rewards.std(unbiased=False) + 1e-8
-        advantages = (rewards - mean_r) / std_r          # Â_{m,k}
+        # --- Step 3: rewards & normalized advantages (per token) with KL ---
+        # Calculate KL divergence between current policy and old policy
+        kl_div = torch.exp(old_log_probs) * (old_log_probs - curr_log_probs)
+        
+        # Introduce a KL coefficient (beta) to control the penalty strength (e.g., 0.05)
+        beta_kl = 0.05
+        
+        # Subtract the KL penalty from the raw rewards BEFORE calculating advantages
+        rewards = -energies
+        penalized_rewards = rewards - (beta_kl * kl_div)
+        
+        # Calculate advantages using the penalized rewards
+        mean_r = penalized_rewards.mean(dim=-1, keepdim=True)
+        std_r = penalized_rewards.std(dim=-1, unbiased=False, keepdim=True) + 1e-4
+        advantages = (penalized_rewards - mean_r) / std_r 
+        
+        #rewards = -energies                # [B, T-1] (skip start token)
+        #mean_r = rewards.mean(dim=-1, keepdim=True)#mean_r = rewards.mean()
+        #std_r = rewards.std(dim=-1, unbiased=False, keepdim=True) + 1e-4 #std_r = rewards.std(unbiased=False) + 1e-8
+        # advantages = (rewards - mean_r) / std_r          # Â_{m,k}
 
         # --- Step 4: importance ratios & clipping ---
-        ratios = torch.exp(curr_log_probs - old_log_probs)
-        ratios_clipped = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
+        log_ratio = curr_log_probs - old_log_probs
+        log_ratio = torch.clamp(log_ratio, min=-10.0, max=10.0)
+        ratios = torch.exp(log_ratio)
+        #ratios_clipped = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
+
+        # Calculate unclipped and clipped surrogates
+        surr1 = ratios * advantages
+        surr2 = torch.clamp(ratios, 1 - epsilon, 1 + epsilon) * advantages
+        
 
         # --- Step 5: GRPO loss (Eq. 9 generalised to per-step rewards) ---
-        loss = -torch.mean(ratios_clipped * advantages)
-
+        #loss = -torch.mean(ratios_clipped * advantages)
+        loss = -torch.mean(torch.min(surr1,surr2))
+        
         # print({
         #     "r_mean": rewards.mean().item(),
         #     "r_std": rewards.std().item(),

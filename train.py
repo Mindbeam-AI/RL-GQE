@@ -14,6 +14,7 @@ import pennylane as qml
 from torch import nn
 import math
 import random
+import copy
 
 
 def build_operator_pool(n_qubits, t_values=None):
@@ -209,12 +210,27 @@ def main():
         energy_batches = torch.tensor_split(energies[train_inds], n_batches)
         loss_record = 0
 
+        ### ADDED FOR GRPO LOSS
+        epsilon = 0.2
+
+        # Instantiate the reference model ONCE before the loop begins
+        old_model = copy.deepcopy(model)
+        
+        # Freeze the old model's parameters to save memory and prevent tracking
+        for param in old_model.parameters():
+            param.requires_grad = False
+        old_model.eval()
+        ###
+
         for token_batch, energy_batch in zip(token_batches, energy_batches):
             opt.zero_grad()
-            loss = model.calculate_loss(token_batch, energy_batch, beta)
+            loss, advantages = model.calculate_loss_GRPO(token_batch, energy_batch, epsilon, old_model) # GRPO loss
+            #loss = model.calculate_loss(token_batch, energy_batch, beta)
             loss.backward()
             opt.step()
             loss_record += loss.item()
+
+        old_model.load_state_dict(model.state_dict()) # added for GRPO Loss
 
         avg_loss = loss_record / n_batches
         losses.append(avg_loss)

@@ -1,0 +1,5 @@
+heisenberg_extraangles_withbeta/
+heisenberg_extraangles_withbeta_standard_loss/
+__pycache__
+VQE-generated-dataset/
+.ipynb_checkpoints/
