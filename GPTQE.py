@@ -40,14 +40,16 @@ class GPTQE(GPT):
 
         return loss
 
-    def calculate_loss_GRPO(self, tokens, energies, epsilon, old_model=None):
-
-        # --- Step 1: current log-probs ---
-        logits = self(tokens[:, :-1])  # predict next-token logits
-        log_probs = F.log_softmax(logits, dim=-1)
-        curr_log_probs = log_probs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)  # [B, T-1]
-
-        # --- Step 2: old log-probs (frozen policy) ---
+    def calculate_loss_GRPO(model, tokens, advantages, epsilon, old_model=None):        
+        # --- Step 1: Current policy distribution ---
+        logits = model(tokens[:, :-1])
+        log_probs_all = F.log_softmax(logits, dim=-1)
+        probs_all = F.softmax(logits, dim=-1)
+        
+        # Extract log-probs of the actions actually taken
+        curr_log_probs = log_probs_all.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1) 
+    
+        # --- Step 2: Old policy ---
         if old_model is not None:
             with torch.no_grad():
                 old_logits = old_model(tokens[:, :-1])
@@ -55,53 +57,26 @@ class GPTQE(GPT):
                 old_log_probs = old_log_probs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
         else:
             old_log_probs = curr_log_probs.detach()
-
-        # --- Step 3: rewards & normalized advantages (per token) with KL ---
-        # Calculate KL divergence between current policy and old policy
-        kl_div = torch.exp(old_log_probs) * (old_log_probs - curr_log_probs)
-        
-        # Introduce a KL coefficient (beta) to control the penalty strength (e.g., 0.05)
-        beta_kl = 0.05
-        
-        # Subtract the KL penalty from the raw rewards BEFORE calculating advantages
-        rewards = -energies
-        penalized_rewards = rewards - (beta_kl * kl_div)
-        
-        # Calculate advantages using the penalized rewards
-        mean_r = penalized_rewards.mean(dim=-1, keepdim=True)
-        std_r = penalized_rewards.std(dim=-1, unbiased=False, keepdim=True) + 1e-4
-        advantages = (penalized_rewards - mean_r) / std_r 
-        
-        #rewards = -energies                # [B, T-1] (skip start token)
-        #mean_r = rewards.mean(dim=-1, keepdim=True)#mean_r = rewards.mean()
-        #std_r = rewards.std(dim=-1, unbiased=False, keepdim=True) + 1e-4 #std_r = rewards.std(unbiased=False) + 1e-8
-        # advantages = (rewards - mean_r) / std_r          # Â_{m,k}
-
-        # --- Step 4: importance ratios & clipping ---
+    
+        # --- Step 3: Ratios & Clipping ---
         log_ratio = curr_log_probs - old_log_probs
         log_ratio = torch.clamp(log_ratio, min=-10.0, max=10.0)
         ratios = torch.exp(log_ratio)
-        #ratios_clipped = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
-
-        # Calculate unclipped and clipped surrogates
+    
         surr1 = ratios * advantages
         surr2 = torch.clamp(ratios, 1 - epsilon, 1 + epsilon) * advantages
+    
+        # --- Step 4: EXACT ENTROPY BONUS ---
+        # This prevents the model from collapsing to a single sequence
+        # by rewarding it for keeping its probability distribution spread out.
+        entropy = -torch.sum(probs_all * log_probs_all, dim=-1).mean()
+        entropy_coef = 0.01 # Adjust this if the model is too random or too rigid
+    
+        # Maximize surrogate, maximize entropy -> Minimize negative surrogate, minimize negative entropy
+        loss = -torch.mean(torch.min(surr1, surr2)) - (entropy_coef * entropy)
         
+        return loss
 
-        # --- Step 5: GRPO loss (Eq. 9 generalised to per-step rewards) ---
-        #loss = -torch.mean(ratios_clipped * advantages)
-        loss = -torch.mean(torch.min(surr1,surr2))
-        
-        # print({
-        #     "r_mean": rewards.mean().item(),
-        #     "r_std": rewards.std().item(),
-        #     "A_mean": advantages.mean().item(),
-        #     "A_std": advantages.std().item(),
-        #     "ratio_mean": ratios.mean().item(),
-        #     "ratio_std": ratios.std().item(),
-        #     "loss": loss.item(),
-        # })
-        return loss, advantages
 
     def calculate_loss_DPO(self, tokens, energies, beta, ref_model=None):
         M, T = tokens.shape
