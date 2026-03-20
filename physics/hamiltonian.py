@@ -2,7 +2,7 @@ from pennylane import Hamiltonian, PauliX, PauliY, PauliZ, FermiA, FermiC, jorda
 from qiskit import QuantumCircuit
 
 def sum_to_hamiltonian(op_sum):
-    terms = op_sum.terms()  # list of ([coeff], [observable])
+    terms = op_sum.terms()
     coeffs = [c for c in terms[0]]
     ops = [o for o in terms[1]]
     return Hamiltonian(coeffs, ops)
