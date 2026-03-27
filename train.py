@@ -172,16 +172,15 @@ class RLTrainer:
     def train(self):
         self.fill_initial_buffer()
         
-        base_temp = self.cfg.temp_explore
-        ratchet_temp = 0.0
-        spike_temp = 0.0  # Applied once, then resets
+        step_temp = 0.0
+        spike_temp = 0.0
         
         for epoch in range(self.cfg.n_epochs + 1):
             
-            # Calculate current active temperature for this epoch
-            active_temp = base_temp + ratchet_temp + spike_temp
+            # 1. Calculate Active Temp and clamp it to the ceiling
+            active_temp = min(self.cfg.temp_min + step_temp + spike_temp, self.cfg.temp_max)
             
-            # 1. Explore
+            # 2. Explore
             if epoch % self.cfg.gen_iter == 0:
                 tokens, advantages, rewards = self.generate_rollouts(temp=active_temp)
                 b_size, b_mean, b_max = self.buffer.stats()
@@ -190,31 +189,39 @@ class RLTrainer:
                 gen_mean = gen_energies.mean().item()
                 unique_cnt = torch.unique(tokens, dim=0).size(0)
                 
-                # Reset the temporary spike after it is used
+                # Reset temporary spike after use
                 spike_temp = 0.0 
                 
-                # --- The Hybrid Temperature Logic ---
-                if unique_cnt < (len(tokens) * self.cfg.anneal_cutoff):
-                    spike_temp = self.cfg.spike_magnitude       
-                    ratchet_temp += self.cfg.temp_step   
-                    print(f"  [Diversity Alert] Unique: {unique_cnt}. Ratcheting base. Next Temp will spike to {base_temp + ratchet_temp + spike_temp:.2f}")
-                    
+                # --- Bidirectional Temperature Logic ---
+                diversity_ratio = unique_cnt / len(tokens)
+                
+                # Condition A: Policy Collapsing -> Heat Up
+                if diversity_ratio < 0.20:
+                    spike_temp = self.cfg.spike_magnitude
+                    # Ratchet up, but do not exceed the distance to temp_max
+                    step_temp = min(step_temp + self.cfg.temp_step, self.cfg.temp_max - self.cfg.temp_min)
+                    print(f"  [Heating] Unique: {unique_cnt}. Ratcheting base. Next Temp will spike.")
+                
+                # Condition B: Thermal Meltdown -> Cool Down
+                elif diversity_ratio >= 0.90 and step_temp > 0.0:
+                    # Decay down, but never drop below 0.0 (which keeps active_temp at temp_min)
+                    step_temp = max(step_temp - self.cfg.temp_step * 4, 0.0)
+                    print(f"  [Cooling] Unique: {unique_cnt}. Diversity restored. Decaying base temp.")
+                
                 print(f"Epoch {epoch} | Gen Mean: {gen_mean:.4f} | Unique: {unique_cnt}/{len(tokens)} | Temp Used: {active_temp:.2f}")
                 print(f"  [Buffer] Size: {b_size}/{self.cfg.buffer_size} | Mean E: {-b_mean:.4f} | Best E: {-b_max:.4f}")
 
-            # 2. Evaluate
+            # 3. Evaluate
             if epoch % self.cfg.eval_iter == 0:
                 self.evaluate(epoch)
 
-            # 3. Optimize
+            # 4. Optimize
             avg_loss = self.update_policy(tokens, advantages, epoch, rewards)
             self.history['losses'].append(avg_loss)
             
-            # Clean logging for non-eval epochs
             if epoch % self.cfg.eval_iter != 0:
                 print(f"  [Optimization] Loss: {avg_loss:.4f}\n")
 
-        # 4. Save 
         print("\nTraining complete. Saving artifacts...")
         save_training_artifacts(self.history, self.model, self.opt, self.cfg, self.grd_E)
         
