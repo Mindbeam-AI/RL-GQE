@@ -4,9 +4,9 @@ from dataclasses import dataclass
 class TrainConfig:
     # General
     seed: int = 1
-    save_dir: str = "./experiments/annealing_longer_circ"
+    save_dir: str = "./experiments/GRPO_SIL_Anneal_Mask3"
     load_model: bool = False
-
+    
     # Quantum Environment
     ham_label: int = 1
     num_qubits: int = 4
@@ -27,6 +27,11 @@ class TrainConfig:
     temp_max: float = 2.0
 
     # RL & Optimization
+    algo = "grpo" # can change to ppo_sil
+    beta: float = 0.02
+    ref_sync_iter: int = 10
+    sil_weight: float = 2.0
+
     n_epochs: int = 700
     n_batches: int = 4
     ppo_epochs: int = 4
@@ -39,5 +44,6 @@ class TrainConfig:
     buffer_size: int = 24
     buffer_floor: float = 4.0
     div_threshold: int = 2
-    eval_iter: int = 1
+    
+    eval_iter: int = 10
     plot_iter: int = 50

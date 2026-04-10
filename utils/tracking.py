@@ -34,14 +34,35 @@ def save_training_artifacts(history, model, optimizer, cfg, grd_E=None):
     os.makedirs(dir, exist_ok=True)
     hvplot.extension('matplotlib')
 
-    # 1. Losses
+    # 1. Training Dynamics (Loss, KL, Temp, Buffer)
     if history.get('losses'):
-        df_loss = pd.DataFrame(history['losses'], columns=["loss"])
-        df_loss.to_csv(f"{dir}/losses.csv", index=False)
-        loss_fig = df_loss.hvplot(
-            title="Training Loss Progress", ylabel="Loss", xlabel="Optimization Steps"
+        # Combine all per-epoch metrics into one DataFrame
+        df_dynamics = pd.DataFrame({
+            "Epoch": range(1, len(history['losses']) + 1),
+            "Loss": history['losses'],
+            "KL_Div": history.get('kl_divs', []),
+            "Temperature": history.get('active_temps', []),
+            "Buffer_Min": history.get('buffer_mins', [])
+        })
+        df_dynamics.to_csv(f"{dir}/training_dynamics.csv", index=False)
+        
+        # Plot Loss
+        loss_fig = df_dynamics.hvplot(
+            x="Epoch", y="Loss", title="Training Loss", ylabel="Loss"
         ).opts(fig_size=600, fontscale=2, aspect=1.2)
         hv.save(loss_fig, f"{dir}/loss_fig.png")
+
+        # Plot Temperature & Buffer Progress
+        temp_curve = df_dynamics.hvplot.line(
+            x="Epoch", y="Temperature", ylabel="Temperature", title="Active Temperature", color="orange"
+        )
+        buffer_curve = df_dynamics.hvplot.line(
+            x="Epoch", y="Buffer_Min", ylabel="Min Energy", title="Buffer Progression", color="purple"
+        )
+        
+        # Combine into a vertical layout (1 column)
+        diag_fig = (temp_curve + buffer_curve).cols(1).opts(shared_axes=False, fig_size=300, fontscale=1.5)
+        hv.save(diag_fig, f"{dir}/diagnostics_fig.png")
 
     # 2. Evaluation Progress (Deterministic Policy)
     if history.get('eval_Es'):
@@ -82,8 +103,26 @@ def save_training_artifacts(history, model, optimizer, cfg, grd_E=None):
     metadata.update({
         "ground_energy": float(grd_E) if grd_E is not None else None,
         "final_loss": float(history['losses'][-1]) if history.get('losses') else None,
-        "best_eval_min": float(np.min(eval_Es)) if history.get('eval_Es') else None
+        "best_eval_min": float(np.min(eval_Es)) if history.get('eval_Es') else None,
+        "best_eval_epoch": int(history.get('best_eval_epoch', 0)) 
     })
 
     with open(f"{dir}/metadata.json", "w") as f:
         json.dump(metadata, f, indent=4)
+
+def print_training_step(epoch, gen_min, gen_mean, unique_cnt, total_seqs, active_temp, algo, avg_loss, avg_kl=None, b_size=0, b_mean_E=0.0, b_min_E=0.0, b_max_size=24):
+    print(f"Epoch {epoch} | Gen Min: {gen_min:.4f} | Gen Mean: {gen_mean:.4f} | Unique: {unique_cnt}/{total_seqs} | Temp Used: {active_temp:.2f}")
+    
+    if b_size > 0:
+        print(f"  [Buffer] Size: {b_size}/{b_max_size} | Mean E: {b_mean_E:.4f} | Min E: {b_min_E:.4f}")
+    else:
+        print(f"  [Buffer] Empty (Waiting for E < -{4.00})")
+        
+    if algo == "grpo" and avg_kl is not None:
+        print(f"  [Optimization] Loss: {avg_loss:.4f} | KL Div: {avg_kl:.4f}")
+    else:
+        print(f"  [Optimization] Loss: {avg_loss:.4f}")
+
+def print_eval_step(epoch, eval_min, eval_mean, unique_cnt, total_seqs, temp_eval, eval_seq):
+    print(f"[Verify] Eval Min: {eval_min:.4f} | Eval Mean: {eval_mean:.4f} | Unique: {unique_cnt}/{total_seqs} | Temp Used: {temp_eval:.2f}")
+    print(f"         Eval Seq: {eval_seq}\n")

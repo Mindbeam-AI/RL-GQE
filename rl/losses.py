@@ -22,3 +22,24 @@ def compute_sil_loss(model, sil_tokens, sil_rewards, floor=4.0):
     advs = (raw_advs - raw_advs.mean()) / (raw_advs.std() + 1e-8) if len(raw_advs) > 1 else raw_advs
 
     return -(sil_log_probs * advs.unsqueeze(-1).expand_as(sil_log_probs)).mean()
+
+def compute_grpo_loss(model, tokens, advantages, epsilon, ref_model, beta=0.01):
+    dist = Categorical(logits=model(tokens[:, :-1]))
+    log_probs = dist.log_prob(tokens[:, 1:])
+
+    with torch.no_grad():
+        ref_dist = Categorical(logits=ref_model(tokens[:, :-1]))
+        ref_log_probs = ref_dist.log_prob(tokens[:, 1:])
+
+    # Exact KL Divergence per token
+    log_ratio = ref_log_probs - log_probs
+    kl_div = torch.exp(log_ratio) - log_ratio - 1.0
+
+    ratio = torch.exp(log_probs - ref_log_probs)
+    surr1 = ratio * advantages
+    surr2 = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantages
+
+    loss = -torch.mean(torch.min(surr1, surr2) - beta * kl_div)
+    
+    # Return both the loss and the mean KL Divergence
+    return loss, kl_div.mean()

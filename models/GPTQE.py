@@ -20,16 +20,31 @@ class GPTQE(GPT):
         return logits
 
     @torch.no_grad()
-    def generate(self, n_sequences, max_new_tokens, temperature=1.0, device="cpu"):
-        idx = torch.zeros(size=(n_sequences, 1), dtype=int, device=device)
+    def generate(self, n_sequences, max_new_tokens, temperature=1.0, device="cpu", action_mask=None):
+        idx = torch.zeros(size=(n_sequences, 1), dtype=torch.long, device=device)
         total_logits = torch.zeros(size=(n_sequences, 1), device=device)
-        for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]  # crops sequence to blocksize
-            logits = self(idx_cond)  # forward the model to get logits forthe index in the sequence
-            logits = logits[:, -1, :]  # pluck logits from final step
-            logits[:, 0] = float('inf')  # sets logit of first token so probability 0sampled_ids)
-            probs = F.softmax(-logits / temperature, dim=-1)  # apply softmax to get probabilities from logits 
-            idx_next = torch.multinomial(probs, num_samples=1)  # sample from probability distribution
-            total_logits += torch.gather(logits, index=idx_next, dim=1)  # accumulates logits
-            idx = torch.cat((idx, idx_next), dim=1)  # append sampled index to sequence
+        
+        for step in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:] 
+            logits = self(idx_cond) 
+            logits = logits[:, -1, :] 
+            
+            # The start token must be negatively masked so it's never generated
+            logits[:, 0] = -float('inf') 
+            
+            # --- APPLY ACTION MASK ---
+            if action_mask is not None and step > 0:
+                last_tokens = idx[:, -1]
+                forbidden_mask = action_mask[last_tokens]
+                
+                # Set forbidden logits to negative infinity
+                logits[forbidden_mask] = -float('inf')
+                
+            # CRITICAL FIX: Do NOT negate the logits here. 
+            probs = F.softmax(logits / temperature, dim=-1) 
+            idx_next = torch.multinomial(probs, num_samples=1) 
+            
+            total_logits += torch.gather(logits, index=idx_next, dim=1) 
+            idx = torch.cat((idx, idx_next), dim=1) 
+            
         return idx, total_logits
