@@ -3,8 +3,8 @@ from dataclasses import dataclass
 @dataclass
 class TrainConfig:
     # General
-    seed: int = 1
-    save_dir: str = "./experiments/GRPO_SIL_Anneal_Mask3"
+    seed: int = 3
+    save_dir: str = "./experiments/GRPO_lin1.0SIL_highDiscount_fastAnneal_Mask3"
     load_model: bool = False
     
     # Quantum Environment
@@ -25,14 +25,16 @@ class TrainConfig:
     anneal_cutoff: float = 0.2
     temp_min: float = 1.0
     temp_max: float = 2.0
+    stagnation_epochs = 10
+
 
     # RL & Optimization
     algo = "grpo" # can change to ppo_sil
     beta: float = 0.02
     ref_sync_iter: int = 10
-    sil_weight: float = 2.0
+    sil_weight: float = 1.0 # changed from 1.8, since SIL is linearized
 
-    n_epochs: int = 700
+    n_epochs: int = 300
     n_batches: int = 4
     ppo_epochs: int = 4
     epsilon: float = 0.4
@@ -41,9 +43,13 @@ class TrainConfig:
     entropy_coef: float = 0.05
 
     # Threshold Buffer Tracking
-    buffer_size: int = 24
+    buffer_start_size: int = 24
+    buffer_end_size: int = 4
     buffer_floor: float = 4.0
     div_threshold: int = 2
     
-    eval_iter: int = 10
-    plot_iter: int = 50
+    eval_iter: int = 5
+    plot_iter: int = 20
+
+    # Discounted Future Rewards
+    gamma = 0.80

@@ -34,3 +34,11 @@ class EliteReplayBuffer:
     def stats(self):
         if self.tokens is None: return 0, 0.0, 0.0
         return len(self.tokens), self.rewards.mean().item(), self.rewards[0].item()
+
+    def shrink_capacity(self, new_max_size):
+        self.max_size = new_max_size
+        # If we currently hold more circuits than the new limit, slice off the bottom
+        if self.tokens is not None and len(self.tokens) > new_max_size:
+            # Tensors are already sorted descending in add(), so we just keep the top slice
+            self.tokens = self.tokens[:new_max_size]
+            self.rewards = self.rewards[:new_max_size]

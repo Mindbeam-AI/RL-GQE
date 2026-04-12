@@ -19,8 +19,9 @@ def compute_sil_loss(model, sil_tokens, sil_rewards, floor=4.0):
     sil_log_probs = dist.log_prob(sil_tokens[:, 1:])
 
     raw_advs = torch.clamp(sil_rewards - floor, min=0.1) 
-    advs = (raw_advs - raw_advs.mean()) / (raw_advs.std() + 1e-8) if len(raw_advs) > 1 else raw_advs
-
+    #advs = (raw_advs - raw_advs.mean()) / (raw_advs.std() + 1e-8) if len(raw_advs) > 1 else raw_advs # uncomment for Z-score Normalization
+    advs = raw_advs * 2.0 # uncomment for linearized SIL loss
+    
     return -(sil_log_probs * advs.unsqueeze(-1).expand_as(sil_log_probs)).mean()
 
 def compute_grpo_loss(model, tokens, advantages, epsilon, ref_model, beta=0.01):

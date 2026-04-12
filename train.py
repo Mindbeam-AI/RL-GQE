@@ -19,7 +19,7 @@ class RLTrainer:
         self.setup_physics()
         self.setup_models()
         
-        self.buffer = EliteReplayBuffer(max_size=cfg.buffer_size, absolute_floor=cfg.buffer_floor)
+        self.buffer = EliteReplayBuffer(max_size=cfg.buffer_start_size, absolute_floor=cfg.buffer_floor)
             
         # Tracking dictionaries
         self.history = {
@@ -109,12 +109,14 @@ class RLTrainer:
             gate_cost = 0.005 
             step_rewards = energy_change - gate_cost
             
-            # 2. Calculate the Return-to-Go (Cumulative future rewards)
+            # 2. Calculate Discounted Cumulative Rewards
             # This ensures early gates are judged by the final sequence energy they lead to.
             returns = torch.zeros_like(step_rewards)
             returns[:, -1] = step_rewards[:, -1]
+
+            # Walk backward through the sequence, discounting the future
             for t in reversed(range(step_rewards.size(1) - 1)):
-                returns[:, t] = step_rewards[:, t] + returns[:, t+1] # Assuming gamma discount = 1.0 for short circuits
+                returns[:, t] = step_rewards[:, t] + self.cfg.gamma * returns[:, t+1]
             
             # 3. Group Normalization on the Returns
             mean_ret = returns.mean(dim=0, keepdim=True)
@@ -246,6 +248,29 @@ class RLTrainer:
         
         for epoch in range(self.cfg.n_epochs + 1):
             active_temp = min(self.cfg.temp_min + step_temp + spike_temp, self.cfg.temp_max)
+
+            # --- DYNAMIC BUFFER CAPACITY ---
+            # 1. Stay at Max for the first 25% of training
+            burn_in_threshold = int(self.cfg.n_epochs * 0.25)
+            
+            if epoch < burn_in_threshold:
+                current_buffer_size = self.cfg.buffer_start_size
+            else:
+                # 2. Exponentially decay for the remaining 75%
+                t_rel = epoch - burn_in_threshold
+                t_rem = self.cfg.n_epochs - burn_in_threshold
+                
+                # Calculate the decay rate constant k
+                ratio = self.cfg.buffer_end_size / self.cfg.buffer_start_size
+                k = -np.log(ratio) / t_rem
+                
+                # Calculate exponential size and round to nearest integer
+                current_buffer_size = int(self.cfg.buffer_start_size * np.exp(-k * t_rel * 2))
+                
+                # Ensure we never drop below the minimum floor
+                current_buffer_size = max(current_buffer_size, self.cfg.buffer_end_size)
+
+            self.buffer.shrink_capacity(current_buffer_size)
             
             # --- 1. GENERATION ---
             if epoch % self.cfg.gen_iter == 0:
@@ -257,7 +282,7 @@ class RLTrainer:
                 gen_std = gen_energies.std().item() # NEW: Calculate standard deviation
                 unique_cnt = torch.unique(tokens, dim=0).size(0)
                 
-                # --- NEW TEMPERATURE LOGIC (Energy Stagnation) ---
+                # --- NEW TEMPERATURE LOGIC (Energy Stagnation + Global Decay) ---
                 spike_temp = 0.0 
                 
                 # Check if we found a meaningfully better minimum
@@ -271,14 +296,23 @@ class RLTrainer:
                 else:
                     stagnation_counter += 1
 
-                # If stuck in the same energy band for 15 epochs
-                if stagnation_counter >= 15:
-                    spike_temp = self.cfg.spike_magnitude
-                    # Raise the baseline temperature slightly to encourage wider search
-                    step_temp = min(step_temp + self.cfg.temp_step, self.cfg.temp_max - self.cfg.temp_min)
+                # If stuck in the same energy band for stagnation epochs
+                if stagnation_counter >= self.cfg.stagnation_epochs:
+                    # GLOBAL DECAY: We rely strictly on the training timeline.
+                    # Spikes get exponentially weaker as training progresses.
+                    #decay_ratio = max(0.0, 1.0 - (epoch / self.cfg.n_epochs))
+                    decay_ratio = 1.0 ### UNCOMMENT ABOVE FOR EXP DECR TEMP SPIKES
+                    # Final Exploitation Phase: In the last 15% of training, disable spikes 
+                    # entirely so SIL and the optimizer can lock into the best known minimum.
+                    if decay_ratio < 0.15:
+                        spike_temp = 0.0
+                        step_temp = 0.0
+                    else:
+                        spike_temp = self.cfg.spike_magnitude * decay_ratio
+                        step_temp = min(step_temp + (self.cfg.temp_step * decay_ratio), self.cfg.temp_max - self.cfg.temp_min)
                     
                     stagnation_counter = 0 # Reset the counter
-                    best_window_min = gen_min # Reset the baseline so it doesn't get permanently stuck
+                    best_window_min = gen_min # Reset the baseline
                     
 
             # --- 2. OPTIMIZATION ---
@@ -310,7 +344,7 @@ class RLTrainer:
                 b_size=b_size,
                 b_mean_E=b_mean_E,
                 b_min_E=b_min_E,
-                b_max_size=self.cfg.buffer_size
+                b_max_size=current_buffer_size
             )
             
             # --- 4. EVALUATION (Runs after training print) ---
