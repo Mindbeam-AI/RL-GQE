@@ -9,11 +9,11 @@ import hvplot.pandas
 from dataclasses import asdict
 
 def plot_epoch_histogram(energies, epoch, grd_E, save_dir):
+    """Plots and saves the distribution of generated sequence energies for a given epoch."""
+    
     plt.figure(figsize=(10, 5))
     
-    # In RL, we only have the measured sequence energy, not a predicted scalar
     plt.hist(energies, bins=30, alpha=0.7, color='blue', edgecolor='black', label='Generator Energy')
-    
     plt.axvline(np.min(energies), color='red', linestyle='--', label=f'Min E: {np.min(energies):.4f}')
     plt.axvline(np.mean(energies), color='black', linestyle='--', label=f'Mean E: {np.mean(energies):.4f}')
     
@@ -29,7 +29,15 @@ def plot_epoch_histogram(energies, epoch, grd_E, save_dir):
     plt.savefig(f"{save_dir}/histo/epoch_{epoch}.png")
     plt.close()
 
-def save_training_artifacts(history, model, optimizer, cfg, grd_E=None):
+def save_training_artifacts(
+    history, 
+    model, 
+    optimizer, 
+    cfg, 
+    grd_E=None
+):
+    """Consolidates and saves all training metrics, plots, weights, and metadata."""
+    
     dir = cfg.save_dir
     os.makedirs(dir, exist_ok=True)
     hvplot.extension('matplotlib')
@@ -99,7 +107,6 @@ def save_training_artifacts(history, model, optimizer, cfg, grd_E=None):
 
     metadata = asdict(cfg)
     
-    # Append final RL stats if available
     metadata.update({
         "ground_energy": float(grd_E) if grd_E is not None else None,
         "final_loss": float(history['losses'][-1]) if history.get('losses') else None,
@@ -111,6 +118,8 @@ def save_training_artifacts(history, model, optimizer, cfg, grd_E=None):
         json.dump(metadata, f, indent=4)
 
 def print_training_step(epoch, gen_min, gen_mean, unique_cnt, total_seqs, active_temp, algo, avg_loss, avg_kl=None, b_size=0, b_mean_E=0.0, b_min_E=0.0, b_max_size=24):
+    """Logs generation, buffer, and optimization metrics to the console."""
+    
     print(f"Epoch {epoch} | Gen Min: {gen_min:.4f} | Gen Mean: {gen_mean:.4f} | Unique: {unique_cnt}/{total_seqs} | Temp Used: {active_temp:.2f}")
     
     if b_size > 0:
@@ -124,5 +133,7 @@ def print_training_step(epoch, gen_min, gen_mean, unique_cnt, total_seqs, active
         print(f"  [Optimization] Loss: {avg_loss:.4f}")
 
 def print_eval_step(epoch, eval_min, eval_mean, unique_cnt, total_seqs, temp_eval, eval_seq):
+    """Logs evaluation verification steps to the console."""
+    
     print(f"[Verify] Eval Min: {eval_min:.4f} | Eval Mean: {eval_mean:.4f} | Unique: {unique_cnt}/{total_seqs} | Temp Used: {temp_eval:.2f}")
     print(f"         Eval Seq: {eval_seq}\n")

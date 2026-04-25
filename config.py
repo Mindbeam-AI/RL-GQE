@@ -3,12 +3,13 @@ from dataclasses import dataclass
 @dataclass
 class TrainConfig:
     # General
-    seed: int = 3
-    save_dir: str = "./experiments/GRPO_lin1.0SIL_highDiscount_fastAnneal_Mask3"
+    seed: int = 1
+    save_dir: str = "./experiments/ablation_studies/best2"
     load_model: bool = False
     
     # Quantum Environment
-    ham_label: int = 1
+    # 1D Isotropic Heisenberg XXX Hamiltonian in external magnetic field (j=2), open BCs
+    ham_label: int = 1 
     num_qubits: int = 4
     seq_len: int = 10
 
@@ -26,13 +27,15 @@ class TrainConfig:
     temp_min: float = 1.0
     temp_max: float = 2.0
     stagnation_epochs = 10
+    use_temp_decay: bool = False
 
 
     # RL & Optimization
-    algo = "grpo" # can change to ppo_sil
+    algo = "grpo" # Options: "grpo", "ppo_sil"
     beta: float = 0.02
     ref_sync_iter: int = 10
-    sil_weight: float = 1.0 # changed from 1.8, since SIL is linearized
+    sil_weight: float = 1.0
+    sil_scaling: str = "linear" # Options: "linear", "exponential", "z-score"
 
     n_epochs: int = 300
     n_batches: int = 4
@@ -52,4 +55,7 @@ class TrainConfig:
     plot_iter: int = 20
 
     # Discounted Future Rewards
-    gamma = 0.80
+    gamma: int = 0.8
+    
+    # Action Mask
+    use_action_mask : bool = True

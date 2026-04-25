@@ -12,7 +12,13 @@ from rl import EliteReplayBuffer, compute_ppo_loss, compute_sil_loss, compute_gr
 from models.model import GPTConfig
 from models.GPTQE import GPTQE
 from utils.tracking import plot_epoch_histogram, save_training_artifacts, print_training_step, print_eval_step
+
 class RLTrainer:
+    """
+    Main orchestration class for training the Generative Quantum Eigensolver via RL.
+    Manages environment setup, rollout generation, advantage estimation, and policy optimization.
+    """
+    
     def __init__(self, cfg: TrainConfig):
         self.cfg = cfg
         self.setup_env()
@@ -30,24 +36,28 @@ class RLTrainer:
         self.best_eval_epoch = 0
 
     def setup_env(self):
+        """Seeds all random number generators for reproducibility."""
+        
         os.environ['PYTHONHASHSEED'] = str(self.cfg.seed)
         random.seed(self.cfg.seed)
         np.random.seed(self.cfg.seed)
         torch.manual_seed(self.cfg.seed)
 
     def setup_physics(self):
+        """Loads target Hamiltonian, true ground state, and initializes the operator pool."""
+        
         data = joblib.load(f'./VQE-generated-dataset/data/ground_state/0{self.cfg.num_qubits}qubit/label{self.cfg.ham_label}.jb')
         self.grd_E = data["ground_energy"]
         self.ham = gen_hamiltonian(self.cfg.ham_label, self.cfg.num_qubits)
         self.init_state = [0] * self.cfg.num_qubits
         self.op_pool = np.array(build_operator_pool(self.cfg.num_qubits), dtype=object)
 
-        # Calculate the baseline energy before any gates are applied
+        # Baseline energy before any gates are applied (empty circuit)
         empty_seq = np.array([], dtype=object)
         base_E_array = get_subsequence_energies(empty_seq, self.ham, self.init_state, self.cfg.num_qubits)
         self.base_E = base_E_array[-1] if len(base_E_array) > 0 else 0.0
 
-        # Build Action Mask
+        # Pre-compute valid action mask (Rule: No consecutive identical operations on same wires)
         vocab_size = len(self.op_pool) + 1
         self.action_mask = torch.zeros((vocab_size, vocab_size), dtype=torch.bool, device="cuda")
 
@@ -55,12 +65,13 @@ class RLTrainer:
             idx1 = i + 1  # Offset by 1 because 0 is the start token
             for j, op2 in enumerate(self.op_pool):
                 idx2 = j + 1
-                
-                # Rule: Forbid consecutive gates operating on the exact same Pauli axis and wires
+                # Apply Action Mask Rule
                 if op1.name == op2.name and op1.wires == op2.wires:
                     self.action_mask[idx1, idx2] = True
 
     def setup_models(self):
+        """Initializes the active GPT model, the optimizer, and the frozen reference model."""
+        
         gpt_cfg = GPTConfig(
             vocab_size=len(self.op_pool) + 1, block_size=self.cfg.seq_len, dropout=0.0,
             bias=False, n_layer=4, n_embd=384, n_head=8
@@ -80,17 +91,24 @@ class RLTrainer:
         self.old_model.eval()
 
     def generate_rollouts(self, epoch, temp=None):
-        current_temp = temp if temp is not None else self.cfg.temp_explore
+        """Executes the environment interaction phase to gather trajectories, rewards, and advantages."""
         
+        current_temp = temp if temp is not None else self.cfg.temp_explore
         self.model.eval()
+
+        # PHASE 1: AUTOREGRESSIVE GENERATION
+        
         tokens, _ = self.model.generate(
-            n_sequences=self.cfg.seq_gen * self.cfg.gen_iter, # This forms the Group (G)
+            n_sequences=self.cfg.seq_gen * self.cfg.gen_iter,
             max_new_tokens=self.cfg.seq_len, 
             temperature=current_temp,
             device="cuda",
-            action_mask=self.action_mask # apply action mask
+            action_mask=self.action_mask if self.cfg.use_action_mask else None # apply action mask
         )
 
+        # PHASE 2: REWARD CALCULATION (PHYSICS)
+
+        # Map tokens back to physics operators and evaluate expectation values
         gen_op_seq = self.op_pool[(tokens[:, 1:] - 1).cpu().numpy()]
         energies = torch.tensor(
             get_subsequence_energies(gen_op_seq, self.ham, self.init_state, self.cfg.num_qubits),
@@ -99,8 +117,11 @@ class RLTrainer:
         
         rewards = -energies[:, -1]
 
-        # --- ALGORITHM ROUTING ---
+        # PHASE 3: ALGORITHM ROUTING & ADVANTAGES
+        
         if self.cfg.algo == "grpo":
+            
+            # 3A. Calculate Step Rewards (Energy Change - Gate Penalty)
             init_E_tensor = torch.full((energies.size(0), 1), self.base_E, device="cuda", dtype=torch.float32)
             full_E_trajectory = torch.cat([init_E_tensor, energies], dim=1)
             
@@ -109,16 +130,15 @@ class RLTrainer:
             gate_cost = 0.005 
             step_rewards = energy_change - gate_cost
             
-            # 2. Calculate Discounted Cumulative Rewards
+            # 3B. Calculate Discounted Future Returns
             # This ensures early gates are judged by the final sequence energy they lead to.
             returns = torch.zeros_like(step_rewards)
             returns[:, -1] = step_rewards[:, -1]
 
-            # Walk backward through the sequence, discounting the future
             for t in reversed(range(step_rewards.size(1) - 1)):
                 returns[:, t] = step_rewards[:, t] + self.cfg.gamma * returns[:, t+1]
             
-            # 3. Group Normalization on the Returns
+            # 3C. Group Normalization
             mean_ret = returns.mean(dim=0, keepdim=True)
             std_ret = returns.std(dim=0, keepdim=True) + 1e-8
             
@@ -127,7 +147,7 @@ class RLTrainer:
             if epoch % self.cfg.ref_sync_iter == 0:
                 self.old_model.load_state_dict(self.model.state_dict())
             
-            # --- SIL Buffer Push ---
+            # 3D. SIL Buffer Insertion
             global_baseline = self.buffer.rewards[-1].item() if (self.buffer is not None and self.buffer.is_full()) else self.cfg.buffer_floor
             buffer_mask = rewards > global_baseline
             if buffer_mask.sum() > 0:
@@ -146,19 +166,66 @@ class RLTrainer:
             self.buffer.add(tokens, rewards, seq_advs)
             self.old_model.load_state_dict(self.model.state_dict())
             
-            # Expand PPO's 1D advantage to match token sequence shape
+            # Expand 1D advantage to match token sequence shape
             final_advs = seq_advs.unsqueeze(-1).expand_as(tokens[:, :-1])
             
         return tokens, final_advs, rewards
 
+    def update_policy(self, tokens, advantages, epoch, rewards):
+        """Applies PPO/GRPO and SIL losses to update the policy network."""
+        self.model.train()
+        loss_record = 0.0
+        kl_record = 0.0 
+        
+        for _ in range(self.cfg.ppo_epochs):
+            self.opt.zero_grad()
+            loss_sil = torch.tensor(0.0, device="cuda")
+
+            # STEP 1: SIL ANCHOR LOSS
+            if self.buffer is not None and getattr(self.buffer, 'tokens', None) is not None:
+                dynamic_floor = self.buffer.rewards[len(self.buffer.rewards)//2].item() if self.buffer.is_full() else self.cfg.buffer_floor
+                sil_toks, sil_rews = self.buffer.sample(self.cfg.seq_gen)
+                if sil_toks is not None:
+                    loss_sil = compute_sil_loss(
+                        self.model, sil_toks, sil_rews, 
+                        floor=dynamic_floor, scaling=self.cfg.sil_scaling
+                    )
+
+            # STEP 2: EXPLORER LOSS (GRPO OR PPO)
+            if self.cfg.algo == "grpo":
+                loss_explorer, kl_mean = compute_grpo_loss(
+                    self.model, tokens, advantages, self.cfg.epsilon, self.old_model, self.cfg.beta
+                )
+                kl_record += kl_mean.item()
+                loss = loss_explorer + (self.cfg.sil_weight * loss_sil)
+
+            elif self.cfg.algo == "ppo_sil":
+                loss_explorer = compute_ppo_loss(
+                    self.model, tokens, advantages, self.cfg.epsilon, self.old_model, self.cfg.entropy_coef
+                )
+                loss = loss_explorer + (self.cfg.sil_weight * loss_sil)
+            
+            # STEP 3: BACKPROPAGATION
+            if loss.requires_grad:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.opt.step()
+                loss_record += loss.item()
+                    
+        avg_loss = loss_record / self.cfg.ppo_epochs
+        avg_kl = (kl_record / self.cfg.ppo_epochs) if self.cfg.algo == "grpo" else 0.0
+        return avg_loss, avg_kl
+
     def evaluate(self, epoch):
+        """Deterministic evaluation step to verify true policy improvement without exploration noise."""
+        
         self.model.eval()
         tokens, _ = self.model.generate(
             n_sequences=10, 
             max_new_tokens=self.cfg.seq_len, 
             temperature=self.cfg.temp_eval, 
             device="cuda", 
-            action_mask=self.action_mask # apply action mask
+            action_mask=self.action_mask if self.cfg.use_action_mask else None # apply action mask
         )
 
         eval_op_seq = self.op_pool[(tokens[:, 1:] - 1).cpu().numpy()]
@@ -171,7 +238,7 @@ class RLTrainer:
         self.history['eval_Es'].append(true_Es)
         self.history['eval_epochs'].append(epoch)
 
-        # Call the external tracking function
+        # Call tracking function
         print_eval_step(
             epoch=epoch,
             eval_min=eval_min,
@@ -189,55 +256,21 @@ class RLTrainer:
         if epoch % self.cfg.plot_iter == 0:
             plot_epoch_histogram(true_Es.flatten(), epoch, self.grd_E, self.cfg.save_dir)
 
-    def update_policy(self, tokens, advantages, epoch, rewards):
-        self.model.train()
-        loss_record = 0.0
-        kl_record = 0.0 
-        
-        for _ in range(self.cfg.ppo_epochs):
-            self.opt.zero_grad()
-            
-            if self.cfg.algo == "grpo":
-                # 1. The GRPO Explorer
-                loss_grpo, kl_mean = compute_grpo_loss(
-                    self.model, tokens, advantages, self.cfg.epsilon, self.old_model, self.cfg.beta
-                )
-                kl_record += kl_mean.item()
-                
-                # 2. The SIL Anchor
-                # Sample from the buffer if it has good circuits
-                loss_sil = torch.tensor(0.0, device="cuda")
-                if self.buffer is not None and not self.buffer.tokens is None:
-                    dynamic_floor = self.buffer.rewards[len(self.buffer.rewards)//2].item() if self.buffer.is_full() else self.cfg.buffer_floor
-                    sil_toks, sil_rews = self.buffer.sample(self.cfg.seq_gen)
-                    if sil_toks is not None:
-                        loss_sil = compute_sil_loss(self.model, sil_toks, sil_rews, floor=dynamic_floor)
-                
-                # Combine them. SIL weight pulls hard, GRPO refines.
-                loss = loss_grpo + (self.cfg.sil_weight * loss_sil)
-            
-            if loss.requires_grad:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.opt.step()
-                loss_record += loss.item()
-                    
-        # Return averaged metrics
-        avg_loss = loss_record / self.cfg.ppo_epochs
-        avg_kl = (kl_record / self.cfg.ppo_epochs) if self.cfg.algo == "grpo" else 0.0
-        return avg_loss, avg_kl
-
     def fill_initial_buffer(self):
+        """Pre-fills the SIL buffer with random exploration before structured PPO training begins."""
+    
         print("\n--- Filling Initial Buffer ---")
         fill_step = 1
         while not self.buffer.is_full():
             self.generate_rollouts(epoch=0)
             b_size, b_mean, b_max = self.buffer.stats()
-            print(f"Fill Step {fill_step} | Buffer: {b_size}/{self.cfg.buffer_size} | Mean E: {-b_mean:.4f} | Best E: {-b_max:.4f}")
+            print(f"Fill Step {fill_step} | Buffer: {b_size}/{self.cfg.buffer_start_size} | Mean E: {-b_mean:.4f} | Best E: {-b_max:.4f}")
             fill_step += 1
         print("--- Buffer Full. Starting Training ---\n")
 
     def train(self):
+        """Main training loop orchestrating generation, environment dynamics, and policy updates."""
+        
         if self.cfg.algo == "ppo_sil":
             self.fill_initial_buffer()
         
@@ -249,14 +282,14 @@ class RLTrainer:
         for epoch in range(self.cfg.n_epochs + 1):
             active_temp = min(self.cfg.temp_min + step_temp + spike_temp, self.cfg.temp_max)
 
-            # --- DYNAMIC BUFFER CAPACITY ---
-            # 1. Stay at Max for the first 25% of training
+            # STEP 1: DYNAMIC BUFFER SIZE MANAGEMENT
+            # Stay at Max for the first 25% of training
             burn_in_threshold = int(self.cfg.n_epochs * 0.25)
             
             if epoch < burn_in_threshold:
                 current_buffer_size = self.cfg.buffer_start_size
             else:
-                # 2. Exponentially decay for the remaining 75%
+                # Exponentially decay for the remaining 75%
                 t_rel = epoch - burn_in_threshold
                 t_rem = self.cfg.n_epochs - burn_in_threshold
                 
@@ -272,7 +305,8 @@ class RLTrainer:
 
             self.buffer.shrink_capacity(current_buffer_size)
             
-            # --- 1. GENERATION ---
+            # STEP 2: GENERATION & DYNAMIC TEMPERATURE SCHEDULE
+            
             if epoch % self.cfg.gen_iter == 0:
                 tokens, advantages, rewards = self.generate_rollouts(epoch=epoch, temp=active_temp)
                 
@@ -282,15 +316,13 @@ class RLTrainer:
                 gen_std = gen_energies.std().item() # NEW: Calculate standard deviation
                 unique_cnt = torch.unique(tokens, dim=0).size(0)
                 
-                # --- NEW TEMPERATURE LOGIC (Energy Stagnation + Global Decay) ---
                 spike_temp = 0.0 
-                
-                # Check if we found a meaningfully better minimum
+                # Check if better minimum found
                 if gen_min < best_window_min - 0.02: 
                     best_window_min = gen_min
                     stagnation_counter = 0
                     
-                    # Cool down: we found a valley, let's exploit it
+                    # Cool down: exploit valley
                     if step_temp > 0.0:
                         step_temp = max(step_temp - self.cfg.temp_step * 2, 0.0)
                 else:
@@ -298,12 +330,14 @@ class RLTrainer:
 
                 # If stuck in the same energy band for stagnation epochs
                 if stagnation_counter >= self.cfg.stagnation_epochs:
-                    # GLOBAL DECAY: We rely strictly on the training timeline.
-                    # Spikes get exponentially weaker as training progresses.
-                    #decay_ratio = max(0.0, 1.0 - (epoch / self.cfg.n_epochs))
-                    decay_ratio = 1.0 ### UNCOMMENT ABOVE FOR EXP DECR TEMP SPIKES
-                    # Final Exploitation Phase: In the last 15% of training, disable spikes 
-                    # entirely so SIL and the optimizer can lock into the best known minimum.
+
+                    if self.cfg.use_temp_decay:
+                        # Spikes get exponentially weaker as training progresses
+                        decay_ratio = max(0.0, 1.0 - (epoch / self.cfg.n_epochs))
+                    else:
+                        # Constant spikes throughout training
+                        decay_ratio = 1.0
+                    
                     if decay_ratio < 0.15:
                         spike_temp = 0.0
                         step_temp = 0.0
@@ -315,15 +349,16 @@ class RLTrainer:
                     best_window_min = gen_min # Reset the baseline
                     
 
-            # --- 2. OPTIMIZATION ---
+            # STEP 3: OPTIMIZATION
+            
             avg_loss, avg_kl = self.update_policy(tokens, advantages, epoch, rewards)
             
-            # Logging
+            # STEP 4: LOGGING & EVALUATION
+            
             self.history['losses'].append(avg_loss)
             self.history['kl_divs'].append(avg_kl if self.cfg.algo == "grpo" else 0.0)
             self.history['active_temps'].append(active_temp)
             
-            # --- 3. PRINT TRAINING STEP ---
             b_size, b_mean_rew, b_max_rew = self.buffer.stats()
             self.history['buffer_mins'].append(-b_max_rew if b_size > 0 else 0.0)
             
@@ -347,7 +382,7 @@ class RLTrainer:
                 b_max_size=current_buffer_size
             )
             
-            # --- 4. EVALUATION (Runs after training print) ---
+            # Evaluation checks periodically
             if epoch % self.cfg.eval_iter == 0:
                 self.evaluate(epoch)
         self.history['best_eval_epoch'] = self.best_eval_epoch
