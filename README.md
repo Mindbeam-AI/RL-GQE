@@ -28,22 +28,23 @@ We treat quantum circuit generation as a Markov Decision Process (MDP). An autor
 The project is modularized into distinct domains handling the model, the physics engine, and the RL algorithms.
 
 ```text
-├── config.py              # Centralized hyperparameters (RL, Generation, Physics)
-├── train.py               # Main training orchestration and execution loop
-├── requirements.txt       # Python requirements to install in venv
-├── .gitignore             # Git Ignored files
-├── README.md              # This guide
+├── config.py               # Centralized hyperparameters (RL, Generation, Physics)
+├── train.py                # Main training orchestration and execution loop
+├── requirements.txt        # Python requirements to install in venv
+├── .gitignore              # Git Ignored files
+├── README.md               # This guide
 ├── models/
-│   ├── model.py           # Core Transformer/GPT architecture definitions
-│   └── GPTQE.py           # Quantum-specific generation wrappers and masking logic
+│   ├── model.py            # Core Transformer/GPT architecture definitions
+│   └── GPTQE.py            # Quantum-specific generation wrappers and masking logic
 ├── rl/
-│   ├── losses.py          # Implementations for GRPO, PPO, and SIL loss functions
-│   └── buffer.py          # EliteReplayBuffer for Self-Imitation Learning
+│   ├── losses.py           # Implementations for GRPO, PPO, and SIL loss functions
+│   └── buffer.py           # EliteReplayBuffer for Self-Imitation Learning
 ├── physics/
-│   ├── hamiltonian.py     # Hamiltonian matrix generation and definitions
-│   └── evaluator.py       # Quantum simulation to calculate subsequence energies
+│   ├── hamiltonian.py      # Hamiltonian matrix generation and definitions
+│   └── evaluator.py        # Quantum simulation to calculate subsequence energies
 └── utils/
-    └── tracking.py        # Artifact saving, metric logging, and visualization tools
+    ├─── tracking.py        # Artifact saving, metric logging, and visualization tools
+    └─── report_plotting.py # Creating report-ready plots from runs in experiments/ablation_studies
 ```
 
 
