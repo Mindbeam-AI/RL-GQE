@@ -2,7 +2,9 @@
 
 This repository contains the codebase for an experimental research project applying Reinforcement Learning (RL) to Generative Quantum Eigensolvers (GQE). The goal of this project is to autonomously design quantum circuit ansätze capable of finding the ground state energy of complex quantum Hamiltonians using an autoregressive Transformer policy.
 
-Experimentation Notes are recorded here: https://docs.google.com/document/d/17a2URHEqdNOEp_vzKegu2fZeEMuczSQDS9jdUm0Qczk/edit?usp=sharing
+The technical report can be found here: https://docs.google.com/document/d/12nR4pGRbmB597DoKbAFuqIFUFGvrR1WHi2AseD2QrUo/edit?usp=sharing
+
+The Experimentation notes can be found here: https://docs.google.com/document/d/17a2URHEqdNOEp_vzKegu2fZeEMuczSQDS9jdUm0Qczk/edit?usp=sharing
 
 ## The Problem
 
@@ -90,6 +92,7 @@ This repository serves as a foundational proof-of-concept (achieving ~96% accura
 ### Immediate Experimentation (Short-Term)
 * **Buffer Pre-filling for GRPO:** Currently, the initial buffer fill is gated behind the `ppo_sil` algorithm. Because GRPO also utilizes the SIL anchor, the `fill_initial_buffer()` method must be run unconditionally before training starts to prevent the SIL loss from pulling toward an empty state during early epochs.
 * **Dynamic Buffer Floor Anchoring:** The initial absolute minimum floor for the SIL buffer is currently hardcoded to `-4.0`. For unknown Hamiltonians, this is a flawed assumption. The algorithm should be updated to run a preliminary generation batch (e.g., 100 random rollouts), evaluate the energies, and set the absolute floor to some top percentile (80th percentile or the top 20%) of that initial batch.
+* **Continuous Parameter Optimization:** Following the RL agent's selection of the optimal discrete circuit topology, subject the generated ansatz to a standard VQE continuous parameter optimization phase using gradient descent or Adam. This will tune the fixed-angle Pauli rotations, hopefully bridging the remaining 4% energy gap to achieve true chemical accuracy.
 
 ### Generalization & Encoding (Long-Term)
 * **Hamiltonian Tokenization (Context-Awareness):** Currently, the model unconditionally generates circuits and over-fits to a single static Hamiltonian environment. To generalize the model, we must implement an Encoder network (e.g., a Graph Neural Network or a matrix tokenizer).
