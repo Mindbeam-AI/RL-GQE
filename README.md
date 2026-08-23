@@ -71,8 +71,8 @@ Follow these steps to set up the environment and begin training.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://Mindbeam-AI/Generalized-GQE.git
-cd https://Mindbeam-AI/Generalized-GQE.git
+git clone https://Mindbeam-AI/RL-GQE.git
+cd https://Mindbeam-AI/RL-GQE.git
 
 ```
 
@@ -156,7 +156,7 @@ All model and environment hyperparameters are centralized in `config.py` and can
     plot_iter: int = 20         # Generates and saves evaluation histograms every N epochs.
 ```
 
-The config is already loaded to recreate the best model results for the 4 qubit 1D Isotropic Heisenberg XXX Hamiltonian with $h=2$. In `metadata.json` the ``best_eval_min`` is $-7.5173$ and the Hamiltonian ``ground_energy`` is $-7.8284$, constituting $96.03\%$ accuracy.
+The config is already loaded to recreate the best model results for the 4 qubit 1D Isotropic Heisenberg XXX Hamiltonian with $h=2$. In `metadata.json` the ``best_eval_min`` is $-7.5173$ and the Hamiltonian ``ground_energy`` is $-7.8284$, constituting $96.03$% accuracy.
 
 ## Output Files
 
@@ -186,7 +186,7 @@ This implementation builds upon:
 
 This project was developed by Advaith Cheruvu under Mindbeam Technologies Inc. For questions or issues:
 - **Email**: research@mindbeam.ai or advaith.cheruvu@mindbeam.ai
-- **Issues**: [GitHub Issues](https://github.com/Mindbeam-AI/Generalized-GQE/issues)
+- **Issues**: [GitHub Issues](https://github.com/Mindbeam-AI/RL-GQE/issues)
 
 ## Acknowledgments
 
