@@ -4,11 +4,11 @@ from dataclasses import dataclass
 class TrainConfig:
     # General
     seed: int = 1
-    save_dir: str = "./experiments/ablation_studies/best2"
+    save_dir: str = "./experiments/best"
     load_model: bool = False
     
     # Quantum Environment
-    # 1D Isotropic Heisenberg XXX Hamiltonian in external magnetic field (j=2), open BCs
+    # 1D Isotropic Heisenberg XXX Hamiltonian in external magnetic field (h=2), open BCs
     ham_label: int = 1 
     num_qubits: int = 4
     seq_len: int = 10
@@ -26,12 +26,12 @@ class TrainConfig:
     anneal_cutoff: float = 0.2
     temp_min: float = 1.0
     temp_max: float = 2.0
-    stagnation_epochs = 10
+    stagnation_epochs: int = 10
     use_temp_decay: bool = False
 
 
     # RL & Optimization
-    algo = "grpo" # Options: "grpo", "ppo_sil"
+    algo: str = "grpo" # Options: "grpo", "ppo_sil"
     beta: float = 0.02
     ref_sync_iter: int = 10
     sil_weight: float = 1.0
@@ -48,14 +48,15 @@ class TrainConfig:
     # Threshold Buffer Tracking
     buffer_start_size: int = 24
     buffer_end_size: int = 4
-    buffer_floor: float = 4.0
+    buffer_floor: int = 4.0
     div_threshold: int = 2
-    
-    eval_iter: int = 5
-    plot_iter: int = 20
 
     # Discounted Future Rewards
-    gamma: int = 0.8
+    gamma: float = 0.8
     
     # Action Mask
     use_action_mask : bool = True
+
+    # Logging & Evaluation
+    eval_iter: int = 5
+    plot_iter: int = 20
