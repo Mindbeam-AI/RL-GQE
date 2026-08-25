@@ -1,6 +1,6 @@
 # RL-GQE: Reinforcement Learning towards Generative Quantum Eigensolving
 
-[![Technical Breakdown](https://img.shields.io/badge/📖_Blog-Technical_Breakdown-blueviolet.svg)](https://mindbeam-website-git-rl-gqe-blog-mindbeam.vercel.app/research/rl-gqe)
+[![Technical Breakdown](https://img.shields.io/badge/📖_Blog-Technical_Breakdown-blueviolet.svg)](https://mindbeam.ai/research/rl-gqe)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
