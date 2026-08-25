@@ -199,7 +199,7 @@ This implementation builds upon:
 
 ## Contact
 
-This project was developed by Advaith Cheruvu under Mindbeam Technologies Inc. For questions or issues:
+This project was developed by Advaith Cheruvu under Mindbeam AI. For questions or issues:
 - **Email**: research@mindbeam.ai or advaith.cheruvu@mindbeam.ai
 - **Issues**: [GitHub Issues](https://github.com/Mindbeam-AI/RL-GQE/issues)
 
