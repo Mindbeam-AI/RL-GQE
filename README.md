@@ -174,6 +174,21 @@ Upon completion of a training run, the pipeline automatically generates and save
 * `loss_fig.png`: The objective loss curve representing the explorer loss (GRPO/PPO) combined with the SIL penalty over the training duration. 
 * `histo/histogram_epoch_[X].png`: Distribution plots generated during specific evaluation epochs (set by `plot_iter`), showing the actual spread of generated circuit energies compared to the ground truth.
 
+## Citation
+
+If you use this code or methodology in your research, please cite the project as follows:
+
+```bibtex
+@misc{cheruvu2026rlgqe,
+  author = {Cheruvu, Advaith},
+  organization = {Mindbeam AI},
+  title = {RL-GQE: Reinforcement Learning towards Generative Quantum Eigensolving},
+  year = {2026},
+  url = {[https://github.com/Mindbeam-AI/RL-GQE](https://github.com/Mindbeam-AI/RL-GQE)},
+  note = {GitHub repository and accompanying technical blog post}
+}
+```
+
 ## Related Work
 
 This implementation builds upon:
